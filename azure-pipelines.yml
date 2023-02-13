@@ -5,24 +5,33 @@
 
 trigger:
 - master
+- develop
 - fb/*
 pool:
   name: local
 
-steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
+container: hashicorp/terraform:1.3.8
 
-- script: |
-    echo Add other tasks to build, test, and deploy your project.
-    echo See https://aka.ms/yaml
-  displayName: 'Run a multi-line script'
+stages:
+  - stage: validate
+    displayName: validate
+    jobs:
+    - job: validate
+      steps:
+      - task: TerraformCLI@0
+        inputs:
+          command: 'version'
+          allowTelemetryCollection: true
+      
+      - task: TerraformCLI@0
+        inputs:
+          command: 'validate'
+          allowTelemetryCollection: true
 
-- task: TerraformInstaller@0
-  inputs:
-    terraformVersion: 'latest'
     
-- task: TerraformCLI@0
-  inputs:
-    command: 'version'
-    allowTelemetryCollection: false
+  # - stage: build
+  #   displayName: build
+  #   jobs:
+  #   - job: plan
+  #     steps:
+      
