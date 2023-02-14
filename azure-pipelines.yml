@@ -26,16 +26,22 @@ stages:
     jobs:
     - job: validate
       steps:
-      - task: TerraformCLI@0
+      # - task: TerraformCLI@0
         
-        inputs:
-          command: 'version'
-          allowTelemetryCollection: true
+      #   inputs:
+      #     command: 'version'
+      #     allowTelemetryCollection: true
       
-      - task: TerraformCLI@0
+      # - task: TerraformCLI@0
+      #   inputs:
+      #     command: 'validate'
+      #     allowTelemetryCollection: true
+        
+      - task: tf
+        displayName: tf
         inputs:
-          command: 'validate'
-          allowTelemetryCollection: true
+      - script: |
+          docker run my-registry.azurecr.io/somerepo/rnd-hello:latest
 
     
   # - stage: build
