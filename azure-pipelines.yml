@@ -37,11 +37,11 @@ stages:
       #     command: 'validate'
       #     allowTelemetryCollection: true
         
-      - task: tf
-        displayName: tf
-        inputs:
-      - script: |
-          docker run my-registry.azurecr.io/somerepo/rnd-hello:latest
+      
+      container: hashicorp/terraform:1.3.8
+      steps:
+        - bash: |
+            terraform fmt -check=true -diff=true
 
     
   # - stage: build
