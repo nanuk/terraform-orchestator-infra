@@ -1,0 +1,47 @@
+name: "Terraform Apply"
+
+trigger: none
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+- task: DownloadPipelineArtifact@2
+  displayName: 'Download Terraform Plan'
+  inputs:
+    buildType: specific
+    buildVersionToDownload: 'latest'
+    project: 'CL-OPER-LABS' # replace with the name of your Azure DevOps Project
+    definition: 'Terraform Plan'
+    artifactName: 'terraformPlan'
+    path: '$(Pipeline.Workspace)'
+
+- task: TerraformInstaller@0
+  displayName: "Install Terraform"
+  inputs:
+    terraformVersion: '1.5.2'
+    terraformDownloadLocation: 'https://releases.hashicorp.com/terraform'
+
+- script: |
+    sudo apt-get install apt-transport-https ca-certificates gnupg
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
+    curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key --keyring /usr/share/keyrings/cloud.google.gpg add -
+    sudo apt-get update && sudo apt-get install google-cloud-cli
+  displayName: 'Install Google Cloud CLI'
+
+- task: DownloadSecureFile@1
+  displayName: 'Download json key from secure file'
+  name: jsoncredential
+  inputs:
+    secureFile: '$(json)'
+
+- script: |
+    cp $(jsoncredential.secureFilePath) ./service.json
+    export GOOGLE_APPLICATION_CREDENTIALS=$(Build.SourcesDirectory)/service.json
+    gcloud auth activate-service-account $(email_service_account) --key-file="$(jsoncredential.secureFilePath)" --project=$(gcp_project_id)
+  displayName:  Login GCP
+  
+- script: |
+    terraform init
+    terraform apply $(Pipeline.Workspace)/terraform.tfplan
+  displayName: 'Terraform Apply'

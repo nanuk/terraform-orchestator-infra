@@ -1,0 +1,172 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+- develop
+
+variables:
+  - ${{ if eq(variables['Build.SourceBranchName'], 'develop') }}:
+      - name: json
+        value: nanuktech-gke-ed86c63de16a.json
+      - name: tf_folder
+        value: environments/dev
+  - ${{ if eq(variables['Build.SourceBranchName'], 'qas') }}:
+      - name: json
+        value: qas
+      - name: tf_folder
+        value: environments/qas
+  - ${{ if eq(variables['Build.SourceBranchName'], 'master') }}:
+      - name: json
+        value: gl-for-incendios-dsr.json
+      - name: tf_folder
+        value: environments/prod
+
+
+stages:
+  - stage: Terraform
+    displayName: Terraform
+    pool:
+      vmImage: 'ubuntu-latest'
+    jobs:
+    - job: TerraformInit
+      variables:
+        - group: terraform-dsr
+      #container: google/cloud-sdk:latest
+      steps:
+        - bash: |
+            sudo apt-get install apt-transport-https ca-certificates gnupg
+            echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
+            curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key --keyring /usr/share/keyrings/cloud.google.gpg add -
+            sudo apt-get update && sudo apt-get install google-cloud-cli
+            wget https://releases.hashicorp.com/terraform/0.12.21/terraform_0.12.21_linux_amd64.zip
+            unzip terraform_0.12.21_linux_amd64.zip && rm terraform_0.12.21_linux_amd64.zip
+            sudo mv terraform /usr/bin/terraform
+          displayName:  Install Terraform
+
+        - task: replacetokens@3
+          inputs:
+            targetFiles: '**/*.tf'
+            encoding: 'auto'
+            writeBOM: true
+            escapeType: 'none'
+            actionOnMissing: 'warn'
+            keepToken: false
+            tokenPrefix: '#{'
+            tokenSuffix: '}#'
+            useLegacyPattern: false
+            enableTelemetry: true
+          displayName: Replace Values from Library 
+          
+        - task: DownloadSecureFile@1
+          displayName: 'Download json key from secure file'
+          name: jsoncredential
+          inputs:
+            secureFile: '$(json)'
+
+        - bash: |
+            cp $(jsoncredential.secureFilePath) ./service.json
+            echo "export SERVICE_ACCOUNT_JSON_PATH=$(Pipeline.Workspace)/service_account.json"
+            export GOOGLE_APPLICATION_CREDENTIALS=$(Build.SourcesDirectory)/service.json
+            gcloud auth activate-service-account $(email_service_account) --key-file="$(jsoncredential.secureFilePath)" --project=$(gcp_project_id)
+          displayName:  Login GCP
+
+        - bash: |
+            cd ./'$(tf_folder)'
+            terraform init
+          displayName: init terraform
+
+        - bash: |
+            cd ./'$(tf_folder)'
+            terraform plan -var-file="variable_set.tfvars" -out=terraform.tfplan
+          displayName: plan terraform
+
+        - task: PublishBuildArtifacts@1
+          inputs:
+            pathtoPublish: '$(Build.SourcesDirectory)/$(tf_folder)/terraform.tfplan'
+            artifactName: 'terraformPlan'
+            publishLocation: 'Container'
+          displayName: Publish Artifact
+
+    - job: waitForValidation
+      dependsOn: TerraformInit
+      displayName: Terraform Plan Validation
+      pool: server
+      timeoutInMinutes: 4320 # job times out in 3 days
+      steps:
+      - task: ManualValidation@0
+        timeoutInMinutes: 1440 # task times out in 1 day
+        inputs:
+          notifyUsers: |
+            fernando.pozo@arauco.com
+          instructions: 'Please validate the build configuration and resume'
+          onTimeout: 'reject'
+    
+    - job: TerraformApply
+      dependsOn: waitForValidation
+      displayName: Terraform apply
+      variables:
+        - group: terraform-dsr
+      pool:
+        vmImage: 'ubuntu-latest'
+      steps:
+        - bash: |
+            sudo apt-get install apt-transport-https ca-certificates gnupg
+            echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
+            curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key --keyring /usr/share/keyrings/cloud.google.gpg add -
+            sudo apt-get update && sudo apt-get install google-cloud-cli
+            wget https://releases.hashicorp.com/terraform/0.12.21/terraform_0.12.21_linux_amd64.zip
+            unzip terraform_0.12.21_linux_amd64.zip && rm terraform_0.12.21_linux_amd64.zip
+            sudo mv terraform /usr/bin/terraform
+          displayName:  Install Terraform
+      
+        - task: DownloadSecureFile@1
+          displayName: 'Download json key from secure file'
+          name: jsoncredential
+          inputs:
+            secureFile: '$(json)'
+
+        - task: DownloadPipelineArtifact@2
+          displayName: 'Download Terraform Plan'
+          inputs:
+            artifact: terraformPlan
+            patterns: '**/*.tfplan'
+            path: $(Build.SourcesDirectory)/$(tf_folder)
+
+        - bash: |
+            cp $(jsoncredential.secureFilePath) ./service.json
+            export GOOGLE_APPLICATION_CREDENTIALS=$(Build.SourcesDirectory)/service.json
+            gcloud auth activate-service-account $(email_service_account) --key-file="$(jsoncredential.secureFilePath)" --project=$(gcp_project_id)
+          displayName:  Login GCP  
+
+        - task: replacetokens@3
+          inputs:
+            targetFiles: '**/*.tf'
+            encoding: 'auto'
+            writeBOM: true
+            escapeType: 'none'
+            actionOnMissing: 'warn'
+            keepToken: false
+            tokenPrefix: '#{'
+            tokenSuffix: '}#'
+            useLegacyPattern: false
+            enableTelemetry: true
+          displayName: Replace Values from Library 
+
+        - script: |
+            cd ./'$(tf_folder)'
+            ls
+            terraform init
+            terraform validate
+            terraform apply $(Build.SourcesDirectory)/$(tf_folder)/terraform.tfplan
+          displayName: 'Terraform Apply'
+ 
+      # - bash: |
+      #     cd ./'$(tf_folder)'
+      #     terraform validate
+      #     #terraform apply -auto-approve -var "service_account_json_path=${JSONCREDENTIAL_SECUREFILEPATH}"
+      #   displayName: validate and apply terraform 
+    
+
+          

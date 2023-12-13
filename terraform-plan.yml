@@ -1,0 +1,79 @@
+name: "Terraform Plan"
+
+trigger:
+  branches:
+    include:
+      - develop
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - ${{ if eq(variables['Build.SourceBranchName'], 'develop') }}:
+      - name: json
+        value: nanuktech-gke-ed86c63de16a.json
+      - name: tf_folder
+        value: environments/dev
+  - ${{ if eq(variables['Build.SourceBranchName'], 'qas') }}:
+      - name: json
+        value: qas
+      - name: tf_folder
+        value: environments/qas
+  - ${{ if eq(variables['Build.SourceBranchName'], 'master') }}:
+      - name: json
+        value: gl-for-incendios-dsr.json
+      - name: tf_folder
+        value: environments/prod
+
+steps:
+
+- task: TerraformInstaller@0
+  displayName: "Install Terraform"
+  inputs:
+    terraformVersion: '1.5.2'
+    terraformDownloadLocation: 'https://releases.hashicorp.com/terraform'
+
+- script: |
+    sudo apt-get install apt-transport-https ca-certificates gnupg
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
+    curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key --keyring /usr/share/keyrings/cloud.google.gpg add -
+    sudo apt-get update && sudo apt-get install google-cloud-cli
+  displayName: 'Install Google Cloud CLI'
+
+- task: replacetokens@3
+    inputs:
+      targetFiles: '**/*.tf'
+      encoding: 'auto'
+      writeBOM: true
+      escapeType: 'none'
+      actionOnMissing: 'warn'
+      keepToken: false
+      tokenPrefix: '#{'
+      tokenSuffix: '}#'
+      useLegacyPattern: false
+      enableTelemetry: true
+    displayName: Replace Values from Library 
+
+- task: DownloadSecureFile@1
+  displayName: 'Download json key from secure file'
+  name: jsoncredential
+  inputs:
+    secureFile: '$(json)'
+
+- script: |
+    cp $(jsoncredential.secureFilePath) ./service.json
+    export GOOGLE_APPLICATION_CREDENTIALS=$(Build.SourcesDirectory)/service.json
+    gcloud auth activate-service-account $(email_service_account) --key-file="$(jsoncredential.secureFilePath)" --project=$(gcp_project_id)
+  displayName:  Login GCP
+
+- script: |
+    cd ./'$(tf_folder)'
+    terraform init
+    terraform plan -out=terraform.tfplan
+  displayName: 'Terraform Plan'
+  
+- task: PublishBuildArtifacts@1
+  inputs:
+    pathtoPublish: '$(Build.SourcesDirectory)/terraform.tfplan'
+    artifactName: 'terraformPlan'
+    publishLocation: 'Container'
